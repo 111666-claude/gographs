@@ -21,14 +21,19 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func repoToDot(repo string, cluster bool) (string, error) {
+func repoToDot(repo string, cluster bool, theme Theme) (string, error) {
 	codeDir, err := toDir(repo)
 	if err != nil {
 		log.Errorf("failed to get dir: %s", err)
 		return "", err
 	}
 
-	return dirToDot(codeDir, cluster)
+	dot, err := dirToDot(codeDir, cluster)
+	if err != nil {
+		return "", err
+	}
+
+	return ApplyDOT(dot, theme)
 }
 
 func dirToDot(dir string, cluster bool) (string, error) {

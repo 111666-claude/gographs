@@ -7,6 +7,7 @@ const defaultCluster = true;
 const DOM = {
   // https://magnushoff.com/blog/dependency-free-javascript/
   checkCluster:      document.getElementById('check-cluster'),
+  selectTheme:       document.getElementById('select-theme'),
   externalDot:       document.getElementById('external-dot'),
   externalGoDoc:     document.getElementById('external-godoc'),
   externalRepo:      document.getElementById('external-repo'),
@@ -43,6 +44,10 @@ window.addEventListener('load', (_) => {
     handleInput(false);
   });
 
+  DOM.selectTheme.addEventListener('change', function(_) {
+    handleInput(false);
+  });
+
   updateInputsFromUrl();
   handleInput(false);
 
@@ -61,9 +66,11 @@ window.onpopstate = function(event) {
 
 function updateInputsFromUrl() {
   const searchParams = new URLSearchParams(window.location.search);
+  const theme = searchParams.get('theme');
+  DOM.selectTheme.value = (theme === 'light' || theme === 'dark') ? theme : '';
 
   if (window.location.pathname.startsWith("/repo/")) {
-    // /repo/github.com/siggy/gographs?cluster=false
+    // /repo/github.com/siggy/gographs?cluster=false&theme=dark
     DOM.mainInput.value = window.location.pathname.slice("/repo/".length)
     DOM.checkCluster.checked = searchParams.get('cluster') === 'true';
   } else if (window.location.pathname.startsWith("/svg")) {
@@ -73,6 +80,7 @@ function updateInputsFromUrl() {
     // unrecognized URL, reset everything to default
     DOM.mainInput.value = "";
     DOM.checkCluster.checked = defaultCluster;
+    DOM.selectTheme.value = "";
   }
 
   return;
@@ -328,6 +336,9 @@ function handleInput(refresh) {
     if (DOM.checkCluster.checked) {
       url.searchParams.append("cluster", "true");
     }
+    if (DOM.selectTheme.value) {
+      url.searchParams.append("theme", DOM.selectTheme.value);
+    }
   }
 
   hideError();
@@ -348,6 +359,9 @@ function handleInput(refresh) {
       const urlState = new URL(path, window.location.origin);
       if (!isDefault && DOM.checkCluster.checked && goRepo) {
         urlState.searchParams.append("cluster", "true");
+      }
+      if (!isDefault && DOM.selectTheme.value && goRepo) {
+        urlState.searchParams.append("theme", DOM.selectTheme.value);
       }
 
       document.title =  goRepo ?
@@ -391,6 +405,7 @@ function loadSvg(svgHref, goRepo, blob) {
     DOM.externalGoDoc.href = "https://pkg.go.dev/" + goRepo;
 
     DOM.checkCluster.parentElement.classList.add("visible");
+    DOM.selectTheme.parentElement.classList.add("visible");
     DOM.externalDot.classList.add("visible");
     DOM.externalRepo.classList.add("visible");
     DOM.externalGoDoc.classList.add("visible");
@@ -401,7 +416,8 @@ function loadSvg(svgHref, goRepo, blob) {
     DOM.badgeText.value =
       "[![gographs](https://gographs.io/badge.svg)](https://gographs.io/repo/" + goRepo + clusterParam + ")";
   } else {
-    DOM.checkCluster.parentElement.remove("visible");
+    DOM.checkCluster.parentElement.classList.remove("visible");
+    DOM.selectTheme.parentElement.classList.remove("visible");
     DOM.externalDot.classList.remove("visible");
     DOM.externalRepo.classList.remove("visible");
     DOM.externalGoDoc.classList.remove("visible");

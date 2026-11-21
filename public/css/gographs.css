@@ -188,6 +188,20 @@ body {
   vertical-align: bottom;
 }
 
+#select-theme-label {
+  display: none;
+  position: absolute;
+  left: 80px;
+  bottom: 0;
+}
+#select-theme-label.visible {
+  display: inline;
+}
+
+#select-theme {
+  font-size: 12px;
+}
+
 .external-links {
   position: absolute;
   right: 110px;

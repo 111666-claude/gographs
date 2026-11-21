@@ -1,0 +1,361 @@
+package graph
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// Theme selects the palette used when rendering a graph.
+type Theme string
+
+const (
+	// ThemeDefault preserves the historical output: goda's own node and edge
+	// colors and Graphviz's default white background and black text. Requests
+	// that do not specify a theme get this treatment, byte for byte.
+	ThemeDefault Theme = ""
+
+	// ThemeLight renders a graph intended for a light page background.
+	ThemeLight Theme = "light"
+
+	// ThemeDark renders a graph intended for a dark page background: dark
+	// canvas, light text, and node/edge colors lightened enough to stay legible.
+	ThemeDark Theme = "dark"
+)
+
+// ErrEmptyGraph reports that the graph has no nodes, either because the
+// repository exposes no Go packages or because every package was filtered out
+// (for example a repository that imports only the standard library).
+var ErrEmptyGraph = errors.New("graph contains no nodes")
+
+// ParseTheme validates an untrusted theme value. The empty string (including
+// an absent parameter) maps to ThemeDefault. Unknown values are rejected rather
+// than silently defaulted, so a typo cannot be cached under a bogus theme.
+func ParseTheme(s string) (Theme, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return ThemeDefault, nil
+	case string(ThemeLight):
+		return ThemeLight, nil
+	case string(ThemeDark):
+		return ThemeDark, nil
+	default:
+		return "", fmt.Errorf("unknown theme %q: must be light or dark", s)
+	}
+}
+
+// IsZero reports whether t is the default theme.
+func (t Theme) IsZero() bool {
+	return t == ThemeDefault
+}
+
+// String returns the query parameter value for t.
+func (t Theme) String() string {
+	return string(t)
+}
+
+// themeMarker is written as the first line of themed DOT. It makes theming
+// idempotent and lets logs identify which palette a cached document used.
+const themeMarker = "// gographs-theme: "
+
+// palette holds the Graphviz attributes applied for a theme. Every value is a
+// constant defined in this package; user input never becomes DOT text.
+type palette struct {
+	bgcolor      string
+	fontcolor    string
+	nodeColor    string
+	edgeColor    string
+	clusterColor string
+}
+
+var palettes = map[Theme]palette{
+	ThemeLight: {
+		bgcolor:      "#ffffff",
+		fontcolor:    "#1b1f23",
+		nodeColor:    "#1b1f23",
+		edgeColor:    "#57606a",
+		clusterColor: "#57606a",
+	},
+	ThemeDark: {
+		bgcolor:      "#12161b",
+		fontcolor:    "#e6edf3",
+		nodeColor:    "#e6edf3",
+		edgeColor:    "#8b949e",
+		clusterColor: "#8b949e",
+	},
+}
+
+// HasNodes reports whether dot declares at least one node or edge. goda emits
+// a graph containing only defaults when a repository has no matching packages;
+// that must never be cached or served as a diagram.
+func HasNodes(dot string) bool {
+	for _, line := range strings.Split(dot, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		if strings.Contains(line, "->") || strings.Contains(line, "--") {
+			return true
+		}
+		// A node statement starts with a quoted ID, e.g.
+		//   "github.com/foo/bar/pkg" [label="..." ...];
+		// Default statements start with node/edge/graph or an identifier.
+		if strings.HasPrefix(line, `"`) && strings.Contains(line, "[") {
+			return true
+		}
+	}
+	return false
+}
+
+// DOTTheme reports which theme dot was rendered with, based on the marker line
+// ApplyDOT writes. Unmarked (historical or external) DOT reports ThemeDefault.
+func DOTTheme(dot string) Theme {
+	first, _, _ := strings.Cut(dot, "\n")
+	first = strings.TrimSpace(first)
+	if !strings.HasPrefix(first, themeMarker) {
+		return ThemeDefault
+	}
+	return Theme(strings.TrimSpace(strings.TrimPrefix(first, themeMarker)))
+}
+
+// NormalizeDOT reports whether a cached DOT document is safe to serve for
+// theme. Unmarked documents (written before themes existed) are accepted for
+// any theme because they can be recolored when read; documents marked with a
+// different theme are rejected so a caller never receives another theme's
+// colors under this theme's cache key.
+func NormalizeDOT(dot string, theme Theme) (bool, error) {
+	if strings.TrimSpace(dot) == "" || !HasNodes(dot) {
+		return false, ErrEmptyGraph
+	}
+	if got := DOTTheme(dot); got != ThemeDefault && got != theme {
+		return false, fmt.Errorf("cached dot has theme %q, want %q", got, theme)
+	}
+	return true, nil
+}
+
+// RecolorDOT returns dot rendered for theme, accepting both unthemed DOT and
+// DOT already marked with theme (which is returned unchanged).
+func RecolorDOT(dot string, theme Theme) (string, error) {
+	if got := DOTTheme(dot); got == theme {
+		return dot, nil
+	}
+	return ApplyDOT(dot, theme)
+}
+
+// ApplyDOT returns dot recolored for t. ThemeDefault returns the historical
+// colors: an unthemed document is returned unchanged, byte for byte, and a
+// previously themed document is left as-is rather than half-reverted.
+// The input is generated by goda, but it is treated as untrusted: only fixed
+// palette constants are inserted, and every attribute value is quoted, so
+// nothing caller-controlled can become DOT syntax.
+func ApplyDOT(dot string, t Theme) (string, error) {
+	if !HasNodes(dot) {
+		return "", ErrEmptyGraph
+	}
+
+	p, ok := palettes[t]
+	if !ok {
+		return dot, nil
+	}
+
+	marker := themeMarker + string(t)
+	if got := DOTTheme(dot); got == t {
+		// Already themed; applying again would double-lighten colors.
+		return dot, nil
+	} else if got != ThemeDefault {
+		return "", fmt.Errorf("dot is already themed with %q, cannot apply %q", got, t)
+	}
+
+	var out strings.Builder
+	out.Grow(len(dot) + 256)
+	out.WriteString(marker)
+	out.WriteByte('\n')
+
+	inString := false
+	escaped := false
+	depth := 0
+	for i := 0; i < len(dot); i++ {
+		c := dot[i]
+
+		if inString {
+			switch {
+			case escaped:
+				out.WriteByte(c)
+				escaped = false
+			case c == '\\':
+				out.WriteByte(c)
+				escaped = true
+			case c == '"':
+				out.WriteByte(c)
+				inString = false
+			case c == '\n':
+				// A raw newline would terminate the string early and let the
+				// injected attributes below land inside a label. Escape it.
+				out.WriteString(`\n`)
+			default:
+				out.WriteByte(c)
+			}
+			continue
+		}
+
+		switch {
+		case c == '"':
+			inString = true
+			out.WriteByte(c)
+
+		case c == '{':
+			// Graph body opens here. Insert default attributes first so goda's
+			// own statements below merge with them rather than replacing them
+			// (assignments in a later default statement only override the
+			// attributes they name). Only the outermost graph gets these: a
+			// cluster subgraph inherits them, and repeating them there would
+			// paint the cluster border over its own rank-edge color.
+			out.WriteByte(c)
+			if depth == 0 {
+				out.WriteString("\n    graph [bgcolor=" + quoteDOT(p.bgcolor) +
+					" fontcolor=" + quoteDOT(p.fontcolor) +
+					" pencolor=" + quoteDOT(p.clusterColor) + "];")
+				out.WriteString("\n    node [fontcolor=" + quoteDOT(p.fontcolor) +
+					" color=" + quoteDOT(p.nodeColor) + "];")
+				out.WriteString("\n    edge [fontcolor=" + quoteDOT(p.fontcolor) +
+					" color=" + quoteDOT(p.edgeColor) + "];")
+			}
+			depth++
+			out.WriteByte('\n')
+
+		case isIdentStart(c):
+			// Copy the identifier, then if it is a color attribute followed by
+			// a quoted hex value, rewrite the value. This is what makes goda's
+			// per-package colors readable on the dark canvas.
+			start := i
+			for i < len(dot) && isIdentPart(dot[i]) {
+				i++
+			}
+			ident := dot[start:i]
+			out.WriteString(ident)
+			i--
+
+			if !isColorAttr(ident) {
+				continue
+			}
+			j, ok := attrValue(dot, i+1)
+			if !ok {
+				continue
+			}
+			out.WriteString(dot[i+1 : j.valueStart])
+			if t == ThemeDark {
+				out.WriteString(lightenHex(dot[j.valueStart:j.valueEnd]))
+			} else {
+				out.WriteString(dot[j.valueStart:j.valueEnd])
+			}
+			out.WriteByte('"')
+			i = j.valueEnd
+
+		default:
+			out.WriteByte(c)
+		}
+	}
+
+	return out.String(), nil
+}
+
+type attrSpan struct {
+	valueStart int // index just after the opening quote
+	valueEnd   int // index of the closing quote
+}
+
+// attrValue parses optional whitespace, '=', optional whitespace, and a quoted
+// string starting at src[i:]. It does not handle escapes in the value, which
+// is fine for goda's hex color literals.
+func attrValue(src string, i int) (attrSpan, bool) {
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	if i >= len(src) || src[i] != '=' {
+		return attrSpan{}, false
+	}
+	i++
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
+	}
+	if i >= len(src) || src[i] != '"' {
+		return attrSpan{}, false
+	}
+	start := i + 1
+	end := strings.IndexByte(src[start:], '"')
+	if end < 0 {
+		return attrSpan{}, false
+	}
+	return attrSpan{valueStart: start, valueEnd: start + end}, true
+}
+
+func isColorAttr(ident string) bool {
+	switch ident {
+	case "color", "fillcolor", "fontcolor", "bgcolor", "pencolor":
+		return true
+	default:
+		return false
+	}
+}
+
+func isIdentStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isIdentPart(c byte) bool {
+	return isIdentStart(c) || (c >= '0' && c <= '9')
+}
+
+// lightenHex blends a #RGB, #RRGGBB, or #RRGGBBAA literal toward white while
+// preserving its hue, so goda's dark, saturated colors keep their identity but
+// gain contrast against a dark background. Non-hex values pass through.
+func lightenHex(s string) string {
+	if !strings.HasPrefix(s, "#") {
+		return s
+	}
+	hex := s[1:]
+	if len(hex) != 6 && len(hex) != 8 {
+		return s
+	}
+	rgb, err := strconv.ParseUint(hex[:6], 16, 32)
+	if err != nil {
+		return s
+	}
+
+	// 55% toward white is enough to move goda's l=0.3 colors above the
+	// mid-tone while keeping their hue recognizable.
+	const towardWhite = 0.55
+	channel := func(shift uint) uint64 {
+		c := float64((rgb >> shift) & 0xff)
+		return uint64(c + (255-c)*towardWhite + 0.5)
+	}
+
+	var b strings.Builder
+	b.WriteByte('#')
+	fmt.Fprintf(&b, "%02x%02x%02x", channel(16), channel(8), channel(0))
+	if len(hex) == 8 {
+		b.WriteString(hex[6:])
+	}
+	return b.String()
+}
+
+// quoteDOT quotes s as a DOT string literal. Only palette constants reach this
+// function, but quoting keeps the generated DOT valid regardless.
+func quoteDOT(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"', '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString(`\n`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -53,64 +54,102 @@ func repoHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "public/index.html")
 }
 
-func mkGraphHandler(graph *graph.Client, cache *cache.Cache, log *log.Entry) http.HandlerFunc {
-	// GET  /graph/github.com/siggy/gographs.svg
+// graphDocStore is the cache surface the graph handler needs.
+type graphDocStore interface {
+	render.Cache
+	Clear(repo string) error
+	RepoScoreIncr(repo string)
+}
+
+func mkGraphHandler(graphClient render.DOTSource, cache graphDocStore, log *log.Entry) http.HandlerFunc {
+	// GET  /graph/github.com/siggy/gographs.svg?cluster=true&theme=dark
 	// POST /graph/github.com/siggy/gographs.svg (for refresh)
 	return func(rw http.ResponseWriter, r *http.Request) {
-		vars := r.URL.Query()
-		cluster := vars.Get("cluster") == "true"
-
-		refresh := r.Method == http.MethodPost
-
-		tpl, err := mux.CurrentRoute(r).GetPathTemplate()
+		path, err := mux.CurrentRoute(r).GetPathTemplate()
 		if err != nil {
 			writeError(rw, r, http.StatusInternalServerError, err.Error(), err)
 			return
 		}
-
-		suffix := ""
-		contentType := ""
-		if strings.HasSuffix(r.URL.Path, ".svg") {
-			suffix = ".svg"
-			contentType = "image/svg+xml; charset=utf-8"
-		} else if strings.HasSuffix(r.URL.Path, ".dot") {
-			suffix = ".dot"
-			contentType = "text/plain; charset=utf-8"
-		} else {
-			writeError(rw, r, http.StatusBadRequest, "svg or dot suffix required", nil)
-			return
-		}
-
-		goRepo := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, tpl+"/"), suffix)
-
-		if refresh {
-			log.Debugf("Clearing cache for %s", goRepo)
-			err = cache.Clear(goRepo)
-			if err != nil {
-				log.Errorf("Failed to clear cache for repo %s: %s", goRepo, err)
-			}
-		}
-
-		log.Debugf("Processing %s", goRepo)
-
-		out := ""
-		if suffix == ".svg" {
-			out, err = render.ToSVG(graph, cache, goRepo, cluster)
-		} else if suffix == ".dot" {
-			out, err = render.ToDOT(graph, cache, goRepo, cluster)
-		}
-		if err != nil {
-			message := fmt.Sprintf("Failed to render %s to %s", goRepo, suffix)
-			writeError(rw, r, http.StatusInternalServerError, message, err)
-			return
-		}
-
-		go cache.RepoScoreIncr(goRepo)
-
-		rw.Header().Set("Content-Type", contentType)
-		rw.WriteHeader(http.StatusOK)
-		rw.Write([]byte(out))
+		handleGraph(rw, r, path, graphClient, cache, log)
 	}
+}
+
+// handleGraph serves .svg/.dot documents. It is separate from the mux wiring so
+// it can be tested with a path template directly.
+func handleGraph(rw http.ResponseWriter, r *http.Request, pathTemplate string, graphClient render.DOTSource, cache graphDocStore, log *log.Entry) {
+	vars := r.URL.Query()
+	cluster := vars.Get("cluster") == "true"
+
+	theme, err := render.ParseTheme(vars.Get("theme"))
+	if err != nil {
+		writeError(rw, r, http.StatusBadRequest, err.Error(), err)
+		return
+	}
+
+	refresh := r.Method == http.MethodPost
+
+	suffix := ""
+	contentType := ""
+	if strings.HasSuffix(r.URL.Path, ".svg") {
+		suffix = ".svg"
+		contentType = "image/svg+xml; charset=utf-8"
+	} else if strings.HasSuffix(r.URL.Path, ".dot") {
+		suffix = ".dot"
+		contentType = "text/plain; charset=utf-8"
+	} else {
+		writeError(rw, r, http.StatusBadRequest, "svg or dot suffix required", nil)
+		return
+	}
+
+	goRepo := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, pathTemplate+"/"), suffix)
+	if goRepo == "" {
+		writeError(rw, r, http.StatusBadRequest, "repo required", nil)
+		return
+	}
+
+	if refresh {
+		log.Debugf("Clearing cache for %s", goRepo)
+		err = cache.Clear(goRepo)
+		if err != nil {
+			log.Errorf("Failed to clear cache for repo %s: %s", goRepo, err)
+		}
+	}
+
+	log.Debugf("Processing %s (cluster=%t theme=%q)", goRepo, cluster, theme)
+
+	out := ""
+	if suffix == ".svg" {
+		out, err = render.ToSVG(graphClient, cache, goRepo, cluster, theme)
+	} else if suffix == ".dot" {
+		out, err = render.ToDOT(graphClient, cache, goRepo, cluster, theme)
+	}
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, graph.ErrEmptyGraph):
+			status = http.StatusUnprocessableEntity
+		case graph.IsStatus(err, http.StatusUnprocessableEntity):
+			status = http.StatusUnprocessableEntity
+		case graph.IsStatus(err, http.StatusBadRequest):
+			status = http.StatusBadRequest
+		}
+		message := fmt.Sprintf("Failed to render %s to %s", goRepo, suffix)
+		writeError(rw, r, status, message, err)
+		return
+	}
+
+	go cache.RepoScoreIncr(goRepo)
+
+	rw.Header().Set("Content-Type", contentType)
+	// Theme and cluster change the document, so caches and CDNs must not
+	// share one response across combinations.
+	rw.Header().Set("Cache-Control", "public, max-age=300")
+	rw.Header().Set("Vary", "Accept-Encoding")
+	if !theme.IsZero() {
+		rw.Header().Set("X-Gographs-Theme", theme.String())
+	}
+	rw.WriteHeader(http.StatusOK)
+	rw.Write([]byte(out))
 }
 
 // TODO: poll for this every interval, hold result in local mem
@@ -149,7 +188,10 @@ func writeError(rw http.ResponseWriter, r *http.Request, status int, message str
 	}
 
 	route := mux.CurrentRoute(r)
-	path, _ := route.GetPathTemplate()
+	path := ""
+	if route != nil {
+		path, _ = route.GetPathTemplate()
+	}
 
 	log.Errorf("Failed request for [%s]: [%d] Message: [%s] Error: [%s]", path, status, message, err)
 	prom.CountError(webServer, r, status, message, err)

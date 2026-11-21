@@ -1,0 +1,29 @@
+digraph G {
+    node [penwidth=2 fontsize=10 shape=rectangle target="_graphviz"];
+    edge [tailport=e penwidth=2];
+    compound=true;
+    rankdir=LR;
+    newrank=true;
+    ranksep="1.5";
+    quantum="0.5";
+subgraph "cluster_github.com/siggy/gographs" {
+    label="github.com/siggy/gographs (local)"
+    tooltip="github.com/siggy/gographs (local)"
+    href="https://pkg.go.dev/github.com/siggy/gographs@"
+    "github.com/siggy/gographs" [label="" tooltip="github.com/siggy/gographs" shape=circle color="#079155b2" rank=0];
+    "github.com/siggy/gographs/pkg/cache" [label="pkg/cache\l254 / 8.1KB\l" tooltip="github.com/siggy/gographs/pkg/cache" href="https://pkg.go.dev/github.com/siggy/gographs/pkg/cache" color="#4a0791b2"];
+    "github.com/siggy/gographs/pkg/graph" [label="pkg/graph\l737 / 22.6KB\l" tooltip="github.com/siggy/gographs/pkg/graph" href="https://pkg.go.dev/github.com/siggy/gographs/pkg/graph" color="#159107b2"];
+    "github.com/siggy/gographs/pkg/prom" [label="pkg/prom\l58 / 2.0KB\l" tooltip="github.com/siggy/gographs/pkg/prom" href="https://pkg.go.dev/github.com/siggy/gographs/pkg/prom" color="#914707b2"];
+    "github.com/siggy/gographs/pkg/render" [label="pkg/render\l154 / 5.0KB\l" tooltip="github.com/siggy/gographs/pkg/render" href="https://pkg.go.dev/github.com/siggy/gographs/pkg/render" color="#749107b2"];
+    "github.com/siggy/gographs/pkg/web" [label="pkg/web\l149 / 5.1KB\l" tooltip="github.com/siggy/gographs/pkg/web" href="https://pkg.go.dev/github.com/siggy/gographs/pkg/web" color="#8d9107b2"];
+}
+    "github.com/siggy/gographs" -> "github.com/siggy/gographs/pkg/cache" [tooltip="github.com/siggy/gographs -> github.com/siggy/gographs/pkg/cache" color="#4a0791b2"];
+    "github.com/siggy/gographs" -> "github.com/siggy/gographs/pkg/graph" [tooltip="github.com/siggy/gographs -> github.com/siggy/gographs/pkg/graph" color="#159107b2"];
+    "github.com/siggy/gographs" -> "github.com/siggy/gographs/pkg/web" [tooltip="github.com/siggy/gographs -> github.com/siggy/gographs/pkg/web" color="#8d9107b2"];
+    "github.com/siggy/gographs/pkg/graph" -> "github.com/siggy/gographs/pkg/prom" [tooltip="github.com/siggy/gographs/pkg/graph -> github.com/siggy/gographs/pkg/prom" color="#914707b2"];
+    "github.com/siggy/gographs/pkg/render" -> "github.com/siggy/gographs/pkg/graph" [tooltip="github.com/siggy/gographs/pkg/render -> github.com/siggy/gographs/pkg/graph" color="#159107b2"];
+    "github.com/siggy/gographs/pkg/web" -> "github.com/siggy/gographs/pkg/cache" [tooltip="github.com/siggy/gographs/pkg/web -> github.com/siggy/gographs/pkg/cache" color="#4a0791b2"];
+    "github.com/siggy/gographs/pkg/web" -> "github.com/siggy/gographs/pkg/graph" [tooltip="github.com/siggy/gographs/pkg/web -> github.com/siggy/gographs/pkg/graph" color="#159107b2"];
+    "github.com/siggy/gographs/pkg/web" -> "github.com/siggy/gographs/pkg/prom" [tooltip="github.com/siggy/gographs/pkg/web -> github.com/siggy/gographs/pkg/prom" color="#914707b2"];
+    "github.com/siggy/gographs/pkg/web" -> "github.com/siggy/gographs/pkg/render" [tooltip="github.com/siggy/gographs/pkg/web -> github.com/siggy/gographs/pkg/render" color="#749107b2"];
+}

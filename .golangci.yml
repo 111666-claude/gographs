@@ -36,6 +36,7 @@ linters:
           allow:
           - $gostd
           - github.com/siggy/gographs
+          - github.com/go-git/go-git/v5
           - github.com/gorilla/mux
           - github.com/prometheus/client_golang
           - github.com/sirupsen/logrus

@@ -14,16 +14,35 @@ import (
 )
 
 // Post defines the input POST body to the `/graph` endpoint.
-// curl --data '{"repo":"github.com/siggy/gographs","cluster":true}' -X POST [graph-addr]/graph
+// curl --data '{"repo":"github.com/siggy/gographs","cluster":true,"theme":"dark"}' -X POST [graph-addr]/graph
 type Post struct {
 	Repo    string `json:"repo"`
 	Cluster bool   `json:"cluster"`
+	// Theme is "light", "dark", or empty for the historical default output.
+	Theme string `json:"theme,omitempty"`
 }
 
 // Client provides a client to the graph server.
 type Client struct {
 	url string
 	log *log.Entry
+}
+
+// StatusError reports a non-200 response from the graph server.
+type StatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("graph server returned status %d: %s", e.StatusCode, e.Body)
+}
+
+// IsStatus reports whether err is a graph server response with the given
+// status code.
+func IsStatus(err error, status int) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.StatusCode == status
 }
 
 // DefaultGraphAddr defines the graph server's address when running locally. If
@@ -48,13 +67,14 @@ func NewClient(addr string) *Client {
 	return &Client{url, log}
 }
 
-// Get takes a repo and cluster flag and returns a DOT representation of the
-// repo.
-func (c *Client) Get(repo string, cluster bool) (string, error) {
+// Get takes a repo, cluster flag, and theme and returns a DOT representation
+// of the repo. theme must be a value accepted by ParseTheme.
+func (c *Client) Get(repo string, cluster bool, theme string) (string, error) {
 	body, err := json.Marshal(
 		Post{
 			Repo:    repo,
 			Cluster: cluster,
+			Theme:   theme,
 		},
 	)
 	if err != nil {
@@ -63,7 +83,11 @@ func (c *Client) Get(repo string, cluster bool) (string, error) {
 
 	c.log.Debugf("POST Request: %s", string(body))
 
-	labels := prometheus.Labels{repoLabel: repo, clusterLabel: strconv.FormatBool(cluster)}
+	labels := prometheus.Labels{
+		repoLabel:    repo,
+		clusterLabel: strconv.FormatBool(cluster),
+		themeLabel:   theme,
+	}
 	httpRequests.With(labels).Inc()
 	httpErrors, err := httpErrors.CurryWith(labels)
 	if err != nil {
@@ -90,7 +114,7 @@ func (c *Client) Get(repo string, cluster bool) (string, error) {
 	c.log.Debug(debugStr)
 
 	if resp.StatusCode != http.StatusOK {
-		err := errors.New(debugStr)
+		err := &StatusError{StatusCode: resp.StatusCode, Body: string(respBody)}
 		httpErrors.WithLabelValues(err.Error()).Inc()
 		return "", err
 	}

@@ -44,8 +44,7 @@ var (
 func Middleware(server string) mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			route := mux.CurrentRoute(r)
-			path, _ := route.GetPathTemplate()
+			path := pathTemplate(r)
 			httpRequests.WithLabelValues(server, r.Method, path).Inc()
 			timer := prometheus.NewTimer(httpDuration.WithLabelValues(server, r.Method, path))
 			next.ServeHTTP(w, r)
@@ -56,11 +55,20 @@ func Middleware(server string) mux.MiddlewareFunc {
 
 // CountError increments http error counters.
 func CountError(server string, r *http.Request, status int, message string, err error) {
-	route := mux.CurrentRoute(r)
-	path, _ := route.GetPathTemplate()
 	errStr := ""
 	if err != nil {
 		errStr = err.Error()
 	}
-	httpErrors.WithLabelValues(server, r.Method, path, http.StatusText(status), message, errStr).Inc()
+	httpErrors.WithLabelValues(server, r.Method, pathTemplate(r), http.StatusText(status), message, errStr).Inc()
+}
+
+// pathTemplate returns the matched mux route template, or "" when the request
+// was not routed (as in direct handler tests).
+func pathTemplate(r *http.Request) string {
+	route := mux.CurrentRoute(r)
+	if route == nil {
+		return ""
+	}
+	path, _ := route.GetPathTemplate()
+	return path
 }
